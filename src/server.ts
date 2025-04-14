@@ -1,11 +1,12 @@
 import express, { type Application } from "express";
 import cors from "cors";
+import userRouter from "./routes/user.route";
 
 // Create an Express application
 const app: Application = express();
 
 // Port to listen on
-const PORT = 8000 || process.env.PORT;
+const PORT = process.env.PORT || 8000;
 
 // Middleware to parse JSON bodies
 app.use(express.json());
@@ -20,10 +21,8 @@ app.use(
   })
 );
 
-// Get route
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
+// User routes
+app.use("/api/users", userRouter);
 
 // Listen on port 8000
 app.listen(PORT, () => {
