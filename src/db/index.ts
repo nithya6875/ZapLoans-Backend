@@ -9,6 +9,8 @@ dotenv.config({ path: join(__dirname, "../../.env") });
 
 // Log the connection string (remove sensitive info in production)
 const dbUrl = process.env.DATABASE_URL;
+
+// If the connection string is not defined, log an error and exit
 if (!dbUrl) {
   console.error("DATABASE_URL is not defined in environment variables");
   process.exit(1);
@@ -18,14 +20,13 @@ if (!dbUrl) {
 const pool = new Pool({
   connectionString: dbUrl,
   ssl: {
-    rejectUnauthorized: false // Needed for some hosted PostgreSQL services
-  }
+    rejectUnauthorized: false, // Needed for some hosted PostgreSQL services
+  },
 });
 
-// Test the database connection before proceeding
-console.log("Attempting to connect to database...");
-pool.on('error', (err) => {
-  console.error('Unexpected database error:', err);
+// On error, log the error
+pool.on("error", (err) => {
+  console.error("Unexpected database error:", err);
 });
 
 // Export the pool for use in other parts of the application

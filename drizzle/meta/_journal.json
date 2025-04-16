@@ -15,6 +15,13 @@
       "when": 1744721150202,
       "tag": "0001_soft_reavers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1744831610434,
+      "tag": "0002_glossy_luminals",
+      "breakpoints": true
     }
   ]
 }

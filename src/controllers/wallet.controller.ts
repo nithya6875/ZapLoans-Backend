@@ -25,19 +25,19 @@ const cleanupNonces = () => {
 // Run cleanup every minute
 setInterval(cleanupNonces, 60 * 1000);
 
-export const authController = {
+export const walletController = {
   // Generate a nonce for a wallet address
   getNonce: (req: Request, res: Response) => {
     try {
       const { walletAddress } = req.query;
-      
+
       if (!walletAddress || typeof walletAddress !== "string") {
         return res.status(400).json({ error: "Wallet address is required" });
       }
 
       // Generate a random nonce
       const nonce = randomBytes(32).toString("hex");
-      
+
       // Store the nonce with creation timestamp
       nonceStore[walletAddress] = {
         nonce,
@@ -55,13 +55,17 @@ export const authController = {
   getUserByWallet: async (req: Request, res: Response) => {
     try {
       const { walletAddress } = req.query;
-      
+
       if (!walletAddress || typeof walletAddress !== "string") {
         return res.status(400).json({ error: "Wallet address is required" });
       }
 
       // Find user by wallet address
-      const user = await db.select().from(users).where(eq(users.walletAddress, walletAddress)).limit(1);
+      const user = await db
+        .select()
+        .from(users)
+        .where(eq(users.walletAddress, walletAddress))
+        .limit(1);
 
       if (user.length === 0) {
         return res.status(404).json({ error: "User not found" });
@@ -78,31 +82,37 @@ export const authController = {
   loginWithWallet: async (req: Request, res: Response) => {
     try {
       const { username, walletAddress, email, signature } = req.body;
-      
+
       if (!walletAddress || !signature) {
-        return res.status(400).json({ error: "Wallet address and signature are required" });
+        return res
+          .status(400)
+          .json({ error: "Wallet address and signature are required" });
       }
 
       // Check if nonce exists for this wallet
       if (!nonceStore[walletAddress]) {
-        return res.status(400).json({ error: "No nonce found for this wallet. Please request a new one." });
+        return res.status(400).json({
+          error: "No nonce found for this wallet. Please request a new one.",
+        });
       }
 
       const { nonce, createdAt } = nonceStore[walletAddress];
-      
+
       // Check if nonce has expired
       if (Date.now() - createdAt > NONCE_EXPIRY) {
         delete nonceStore[walletAddress];
-        return res.status(400).json({ error: "Nonce has expired. Please request a new one." });
+        return res
+          .status(400)
+          .json({ error: "Nonce has expired. Please request a new one." });
       }
 
       // Create the message that was signed
       const messageToVerify = `Verify wallet ownership: ${walletAddress}\nNonce: ${nonce}`;
       const messageBytes = new TextEncoder().encode(messageToVerify);
-      
+
       // Convert base58 signature to Uint8Array
       const signatureBytes = bs58.decode(signature);
-      
+
       // Convert walletAddress from base58 to Uint8Array public key
       const publicKeyBytes = bs58.decode(walletAddress);
 
@@ -118,20 +128,30 @@ export const authController = {
       }
 
       // Signature is valid, find or create user
-      let user = await db.select().from(users).where(eq(users.walletAddress, walletAddress)).limit(1);
-      
+      let user = await db
+        .select()
+        .from(users)
+        .where(eq(users.walletAddress, walletAddress))
+        .limit(1);
+
       if (user.length === 0) {
         // Create new user
         if (!username) {
-          return res.status(400).json({ error: "Username is required for registration" });
+          return res
+            .status(400)
+            .json({ error: "Username is required for registration" });
         }
-        
-        const newUser = await db.insert(users).values({
-          username,
-          walletAddress,
-          email: email || null,
-        }).returning();
-        
+
+        const newUser = await db
+          .insert(users)
+          .values({
+            username,
+            email,
+            password: "", // Password is not used for wallet login
+            walletAddress,
+          })
+          .returning();
+
         user = newUser;
       }
 
@@ -144,4 +164,4 @@ export const authController = {
       return res.status(500).json({ error: "Authentication failed" });
     }
   },
-}; 
+};

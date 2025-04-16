@@ -1,76 +1,47 @@
-import type { Request, Response, NextFunction } from 'express';
-import nacl from 'tweetnacl';
-import bs58 from 'bs58';
-import { db } from '../db';
-import { users } from '../db/schema';
-import { eq } from 'drizzle-orm';
+// User Controllers By SOURAV BHOWAL
+import type { NextFunction, Request, Response } from "express";
+import jwt from "jsonwebtoken";
+import apiError from "../utils/apiError.js";
+import asyncHandler from "../utils/asyncHandler.js";
+import { eq } from "drizzle-orm";
+import { db } from "../db/index.js";
+import { users } from "../db/schema.js";
 
-// Extend Request type to include user
-declare global {
-  namespace Express {
-    interface Request {
-      user?: any;
-    }
-  }
-}
+// Middleware to check if the user is authenticated
+export const authMiddleware = asyncHandler(
+  async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      // Get the token from the request headers
+      const token =
+        request.headers.authorization?.split(" ")[1] || request.cookies?.token;
 
-// This middleware verifies that a request has a valid wallet signature
-export const verifyWalletSignature = async (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => {
-  try {
-    // Get the wallet address and signature from headers
-    const walletAddress = req.headers['x-wallet-address'] as string;
-    const signature = req.headers['x-wallet-signature'] as string;
-    const message = req.headers['x-wallet-message'] as string;
+      // If the token is not provided, send a 401 response
+      if (!token) {
+        throw new apiError(401, "Unauthorized. Please provide a token");
+      }
 
-    // Check if all required headers are present
-    if (!walletAddress || !signature || !message) {
-      return res.status(401).json({
-        error: 'Authentication required: wallet address, signature, and message are required',
+      // Verify the token
+      const decodedToken = jwt.verify(token, process.env.JWT_SECRET as string, {
+        algorithms: ["HS256"],
       });
+
+      // Find the user in the database
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, (decodedToken as { id: string }).id),
+      });
+
+      // If the user is not found, send a 401 response
+      if (!user) {
+        throw new apiError(401, "Unauthorized. User not found");
+      }
+
+      // Attach the user to the request object
+      request.user = decodedToken as CustomUser;
+
+      // Call the next middleware
+      next();
+    } catch (error) {
+      throw new apiError(401, "Unauthorized. Invalid token");
     }
-
-    // Find the user by wallet address
-    const userResult = await db
-      .select()
-      .from(users)
-      .where(eq(users.walletAddress, walletAddress))
-      .limit(1);
-
-    if (userResult.length === 0) {
-      return res.status(401).json({ error: 'User not found' });
-    }
-
-    // Convert message to bytes
-    const messageBytes = new TextEncoder().encode(message);
-    
-    // Convert signature from base58 to Uint8Array
-    const signatureBytes = bs58.decode(signature);
-    
-    // Convert wallet address from base58 to Uint8Array public key
-    const publicKeyBytes = bs58.decode(walletAddress);
-
-    // Verify the signature
-    const isValid = nacl.sign.detached.verify(
-      messageBytes,
-      signatureBytes,
-      publicKeyBytes
-    );
-
-    if (!isValid) {
-      return res.status(401).json({ error: 'Invalid signature' });
-    }
-
-    // Attach the user to the request
-    req.user = userResult[0];
-    
-    // Continue to the next middleware or route handler
-    next();
-  } catch (error) {
-    console.error('Authentication error:', error);
-    return res.status(500).json({ error: 'Authentication failed' });
   }
-};
+);
