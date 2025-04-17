@@ -7,6 +7,7 @@ Create a `.env` file in the root directory and add the following environment var
 ```env
 DATABASE_URL=<DATABASE_URL>
 PORT=<PORT>
+JWT_SECRET=""
 ```
 
 To install dependencies:
