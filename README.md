@@ -2,14 +2,6 @@
 
 ## Getting Started
 
-Create a `.env` file in the root directory and add the following environment variables:
-
-```env
-DATABASE_URL=<DATABASE_URL>
-PORT=<PORT>
-JWT_SECRET=""
-```
-
 To install dependencies:
 
 ```bash

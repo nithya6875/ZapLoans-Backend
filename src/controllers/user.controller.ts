@@ -16,6 +16,7 @@ import { users } from "../db/schema.js";
 import { redisClient } from "../lib/redis.js";
 import { generateOTP } from "../utils/otp.js";
 import { sendOTPEmail } from "../utils/sendOTPEmail.js";
+import { sendWelcomeEmail } from "../utils/sendWelcomeEmail.js";
 
 // Sign Up Controller
 export const signUpUser = asyncHandler(
@@ -119,13 +120,20 @@ export const verifyOTP = asyncHandler(
       }
 
       // Update user verification status
-      await db
+      const [user] = await db
         .update(users)
         .set({ isVerified: true })
-        .where(eq(users.username, username));
+        .where(eq(users.username, username))
+        .returning();
 
       // Delete OTP from Redis
       await redisClient.del(otpKey);
+
+      // Send welcome email
+      await sendWelcomeEmail({
+        username: user.username,
+        email: user.email,
+      });
 
       // Send response
       response.status(200).json(new apiResponse(200, null, "User verified."));
