@@ -9,9 +9,13 @@ import { db } from "../db/index.js";
 import {
   signInUserSchema,
   signUpUserSchema,
+  verifyUserSchema,
 } from "../validations/user.validation.js";
 import { or, eq } from "drizzle-orm";
 import { users } from "../db/schema.js";
+import { redisClient } from "../lib/redis.js";
+import { generateOTP } from "../utils/otp.js";
+import { sendOTPEmail } from "../utils/sendOTPEmail.js";
 
 // Sign Up Controller
 export const signUpUser = asyncHandler(
@@ -48,6 +52,7 @@ export const signUpUser = asyncHandler(
           username: username.toLowerCase(),
           email,
           password: hashedPassword,
+          isVerified: false,
         })
         .returning();
 
@@ -56,10 +61,118 @@ export const signUpUser = asyncHandler(
         throw new apiError(400, "User could not be created.");
       }
 
+      // Generate OTP
+      const otp = generateOTP(6);
+
+      // Store OTP in Redis with 5 minutes expiration
+      const otpKey = `otp:${newUser.username}`;
+
+      // Save OTP to Redis
+      await redisClient.set(otpKey, otp, 300);
+
+      // Send OTP email
+      await sendOTPEmail({
+        email: newUser.email,
+        username: newUser.username,
+        otp,
+      });
+
       // Send response
       response
         .status(201)
         .json(new apiResponse(201, null, "User created successfully."));
+    } catch (error) {
+      // Handle error
+      if (error instanceof apiError) {
+        throw error;
+      } else {
+        throw new apiError(500, "Internal server error.");
+      }
+    }
+  }
+);
+
+// Verify OTP Controller
+export const verifyOTP = asyncHandler(
+  async (request: Request, response: Response) => {
+    try {
+      // Validate request body
+      const { error, success, data } = verifyUserSchema.safeParse(request.body);
+
+      // If validation fails, throw an error and send response
+      if (!success) {
+        throw new apiError(400, error?.errors[0]?.message);
+      }
+
+      // Destructure request body
+      const { username, otp } = data;
+
+      // OTP key for Redis
+      const otpKey = `otp:${username}`;
+
+      // Get OTP from Redis
+      const storedOtp = await redisClient.get(otpKey);
+
+      // If OTP does not match, throw an error and send response
+      if (storedOtp !== otp) {
+        throw new apiError(400, "Invalid OTP.");
+      }
+
+      // Update user verification status
+      await db
+        .update(users)
+        .set({ isVerified: true })
+        .where(eq(users.username, username));
+
+      // Delete OTP from Redis
+      await redisClient.del(otpKey);
+
+      // Send response
+      response.status(200).json(new apiResponse(200, null, "User verified."));
+    } catch (error) {
+      // Handle error
+      if (error instanceof apiError) {
+        throw error;
+      } else {
+        throw new apiError(500, "Internal server error.");
+      }
+    }
+  }
+);
+
+// Resend OTP Controller
+export const resendOTP = asyncHandler(
+  async (request: Request, response: Response) => {
+    try {
+      // Validate request body
+      const { error, success, data } = verifyUserSchema.safeParse(request.body);
+
+      // If validation fails, throw an error and send response
+      if (!success) {
+        throw new apiError(400, error?.errors[0]?.message);
+      }
+
+      // Destructure request body
+      const { username } = data;
+
+      // Generate new OTP
+      const otp = generateOTP(6);
+
+      // Store OTP in Redis with 5 minutes expiration
+      const otpKey = `otp:${username}`;
+
+      // Save OTP to Redis
+      await redisClient.set(otpKey, otp, 300);
+
+      // Send OTP email
+      await sendOTPEmail({
+        email: username,
+        username,
+        otp,
+      });
+
+      // Send response
+      response.status(200).json(new apiResponse(200, null, "New OTP sent."));
     } catch (error) {
       // Handle error
       if (error instanceof apiError) {
@@ -96,6 +209,11 @@ export const signInUser = asyncHandler(
         throw new apiError(401, "Invalid email or password.");
       }
 
+      // Check if user is verified
+      if (!user.isVerified) {
+        throw new apiError(401, "User is not verified.");
+      }
+
       // Compare password with hashed password
       const isPasswordValid = await bcrypt.compare(password, user.password);
 
@@ -120,16 +238,26 @@ export const signInUser = asyncHandler(
       }
 
       // Create a cookie with the token
-      response.cookie("token", token, {
+      response.cookie("accessToken", token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
       });
 
+      // Data to be sent in the response
+      const userData = {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        isVerified: user.isVerified,
+        walletAddress: user.walletAddress,
+        accessToken: token,
+      };
+
       // Send response
       response
         .status(200)
-        .json(new apiResponse(200, { token }, "User signed in successfully."));
+        .json(new apiResponse(200, userData, "User signed in successfully."));
     } catch (error) {
       // Handle error
       if (error instanceof apiError) {

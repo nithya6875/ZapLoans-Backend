@@ -48,4 +48,14 @@ export const redisClient = {
       throw error;
     }
   },
+
+  // Delete key from Redis
+  del: async (key: string) => {
+    try {
+      await redis.del(key);
+    } catch (error) {
+      console.error("Error deleting key from Redis:", error);
+      throw error;
+    }
+  },
 };
