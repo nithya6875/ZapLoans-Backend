@@ -1,17 +1,17 @@
 import { Router } from "express";
-import { walletController } from "../controllers/wallet.controller";
-
-// Create a new router instance for authentication routes
+import { getNonce, connectWallet } from "../controllers/wallet.controller";
+import { authMiddleware } from "../middlewares/auth.middleware.js";
+  
+// Create a new router instance for wallet routes
 const walletRouter = Router();
-
+  
 // Route to get a nonce for signature
-walletRouter.get("/nonce", walletController.getNonce as any);
-
-// Route to get user by wallet address
-walletRouter.get("/", walletController.getUserByWallet as any);
-
-// Route to login/register with wallet
-walletRouter.post("/", walletController.loginWithWallet as any);
-
-// Export the auth router
+walletRouter.route("/nonce").get(getNonce);
+  
+// Route to connect wallet to authenticated user
+walletRouter
+  .route("/connect")
+  .post(authMiddleware, connectWallet);
+  
+// Export the wallet router
 export default walletRouter;

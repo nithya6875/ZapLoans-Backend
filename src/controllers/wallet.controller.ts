@@ -5,109 +5,78 @@ import { users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import bs58 from "bs58";
 import { randomBytes } from "crypto";
-
-// Store nonces in memory (in production, use a database or Redis)
-const nonceStore: Record<string, { nonce: string; createdAt: number }> = {};
+import asyncHandler from "../utils/asyncHandler";
+import apiResponse from "../utils/apiResponse";
+import apiError from "../utils/apiError";
+import { redisClient } from "../lib/redis";
 
 // Time validity for nonce (5 minutes)
-const NONCE_EXPIRY = 5 * 60 * 1000;
+const NONCE_EXPIRY = 5 * 60;
 
-// Clean up expired nonces
-const cleanupNonces = () => {
-  const now = Date.now();
-  Object.keys(nonceStore).forEach((address) => {
-    if (now - nonceStore[address].createdAt > NONCE_EXPIRY) {
-      delete nonceStore[address];
-    }
-  });
-};
-
-// Run cleanup every minute
-setInterval(cleanupNonces, 60 * 1000);
-
-export const walletController = {
-  // Generate a nonce for a wallet address
-  getNonce: (req: Request, res: Response) => {
+// Generate a nonce for a wallet address
+export const getNonce = asyncHandler(
+  async (req: Request, res: Response) => {
     try {
       const { walletAddress } = req.query;
 
       if (!walletAddress || typeof walletAddress !== "string") {
-        return res.status(400).json({ error: "Wallet address is required" });
+        throw new apiError(400, "Wallet address is required");
       }
 
       // Generate a random nonce
       const nonce = randomBytes(32).toString("hex");
 
-      // Store the nonce with creation timestamp
-      nonceStore[walletAddress] = {
-        nonce,
-        createdAt: Date.now(),
-      };
+      // Store the nonce in Redis with expiration
+      const nonceKey = `nonce:${walletAddress}`;
+      await redisClient.set(nonceKey, nonce, NONCE_EXPIRY);
 
-      return res.status(200).json({ nonce });
+      res.status(200).json(
+        new apiResponse(200, { nonce }, "Nonce generated successfully")
+      );
     } catch (error) {
-      console.error("Error generating nonce:", error);
-      return res.status(500).json({ error: "Failed to generate nonce" });
-    }
-  },
-
-  // Get user by wallet address
-  getUserByWallet: async (req: Request, res: Response) => {
-    try {
-      const { walletAddress } = req.query;
-
-      if (!walletAddress || typeof walletAddress !== "string") {
-        return res.status(400).json({ error: "Wallet address is required" });
+      if (error instanceof apiError) {
+        throw error;
+      } else {
+        throw new apiError(500, "Failed to generate nonce");
       }
-
-      // Find user by wallet address
-      const user = await db
-        .select()
-        .from(users)
-        .where(eq(users.walletAddress, walletAddress))
-        .limit(1);
-
-      if (user.length === 0) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      return res.status(200).json({ user: user[0] });
-    } catch (error) {
-      console.error("Error fetching user:", error);
-      return res.status(500).json({ error: "Failed to fetch user" });
     }
-  },
+  }
+);
 
-  // Authenticate or register user with wallet
-  loginWithWallet: async (req: Request, res: Response) => {
+// Connect wallet to authenticated user
+export const connectWallet = asyncHandler(
+  async (req: Request, res: Response) => {
     try {
-      const { username, walletAddress, email, signature } = req.body;
+      const { walletAddress, signature } = req.body;
+      
+      // Check if user exists in the request
+      if (!req.user || !req.user.id) {
+        throw new apiError(401, "Authentication required");
+      }
+      
+      const userId = req.user.id;
 
       if (!walletAddress || !signature) {
-        return res
-          .status(400)
-          .json({ error: "Wallet address and signature are required" });
+        throw new apiError(
+          400, 
+          "Wallet address and signature are required"
+        );
       }
+
+      // Get nonce from Redis
+      const nonceKey = `nonce:${walletAddress}`;
+      const nonce = await redisClient.get(nonceKey);
 
       // Check if nonce exists for this wallet
-      if (!nonceStore[walletAddress]) {
-        return res.status(400).json({
-          error: "No nonce found for this wallet. Please request a new one.",
-        });
-      }
-
-      const { nonce, createdAt } = nonceStore[walletAddress];
-
-      // Check if nonce has expired
-      if (Date.now() - createdAt > NONCE_EXPIRY) {
-        delete nonceStore[walletAddress];
-        return res
-          .status(400)
-          .json({ error: "Nonce has expired. Please request a new one." });
+      if (!nonce) {
+        throw new apiError(
+          400, 
+          "No nonce found for this wallet. Please request a new one."
+        );
       }
 
       // Create the message that was signed
-      const messageToVerify = `Verify wallet ownership: ${walletAddress}\nNonce: ${nonce}`;
+      const messageToVerify = `Connect wallet to user account: ${userId}\nNonce: ${nonce}`;
       const messageBytes = new TextEncoder().encode(messageToVerify);
 
       // Convert base58 signature to Uint8Array
@@ -124,44 +93,42 @@ export const walletController = {
       );
 
       if (!isValid) {
-        return res.status(401).json({ error: "Invalid signature" });
+        throw new apiError(401, "Invalid signature");
       }
 
-      // Signature is valid, find or create user
-      let user = await db
-        .select()
-        .from(users)
-        .where(eq(users.walletAddress, walletAddress))
-        .limit(1);
+      // Update user with wallet address
+      const updatedUser = await db
+        .update(users)
+        .set({ walletAddress })
+        .where(eq(users.id, userId))
+        .returning();
 
-      if (user.length === 0) {
-        // Create new user
-        if (!username) {
-          return res
-            .status(400)
-            .json({ error: "Username is required for registration" });
-        }
-
-        const newUser = await db
-          .insert(users)
-          .values({
-            username,
-            email,
-            password: "", // Password is not used for wallet login
-            walletAddress,
-          })
-          .returning();
-
-        user = newUser;
+      if (!updatedUser || updatedUser.length === 0) {
+        throw new apiError(404, "User not found");
       }
 
       // Remove used nonce
-      delete nonceStore[walletAddress];
+      await redisClient.del(nonceKey);
 
-      return res.status(200).json({ user: user[0] });
+      res.status(200).json(
+        new apiResponse(
+          200, 
+          { user: updatedUser[0] }, 
+          "Wallet connected successfully"
+        )
+      );
     } catch (error) {
-      console.error("Authentication error:", error);
-      return res.status(500).json({ error: "Authentication failed" });
+      if (error instanceof apiError) {
+        throw error;
+      } else {
+        throw new apiError(500, "Failed to connect wallet");
+      }
     }
-  },
+  }
+);
+
+// Export wallet controller functions for backwards compatibility
+export const walletController = {
+  getNonce,
+  connectWallet,
 };
